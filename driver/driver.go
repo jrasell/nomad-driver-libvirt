@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,7 +18,7 @@ import (
 	"github.com/hashicorp/nomad/plugins/shared/hclspec"
 	"github.com/hashicorp/nomad/plugins/shared/structs"
 
-	libvirt "github.com/digitalocean/go-libvirt"
+	"github.com/digitalocean/go-libvirt"
 	socket "github.com/digitalocean/go-libvirt/socket/dialers"
 	"libvirt.org/go/libvirtxml"
 )
@@ -174,6 +175,8 @@ func (d *LibVirtDriverPlugin) StartTask(taskConfig *drivers.TaskConfig) (*driver
 		return nil, nil, fmt.Errorf("failed to decode driver config: %v", err)
 	}
 
+	d.logger.Error("task config", "config", driverConfig)
+
 	disks := []libvirtxml.DomainDisk{}
 	for _, disk := range driverConfig.Disk {
 		disks = append(disks, libvirtxml.DomainDisk{
@@ -188,32 +191,11 @@ func (d *LibVirtDriverPlugin) StartTask(taskConfig *drivers.TaskConfig) (*driver
 			},
 			Target: &libvirtxml.DomainDiskTarget{
 				Dev: disk.Target,
+				Bus: "virtio",
 			},
 			Device: disk.Device,
 		})
 	}
-
-	// interfaces := []libvirtxml.DomainInterface{}
-	// for _, i := range driverConfig.Interface {
-	// 	fmt.Println(i)
-	// 	interfaces = append(interfaces, libvirtxml.DomainInterface{
-	// 		Model: &libvirtxml.DomainInterfaceModel{
-	// 			Type: "virtio",
-	// 		},
-	// 		Source: &libvirtxml.DomainInterfaceSource{
-	// 			Network: &libvirtxml.DomainInterfaceSourceNetwork{
-	// 				Network: "nomad",
-	// 				// Bridge: "nomad",
-	// 			},
-	// 			// Direct: &libvirtxml.DomainInterfaceSourceDirect{
-	// 			// 	Dev: "eth0",
-	// 			// },
-	// 			Bridge: &libvirtxml.DomainInterfaceSourceBridge{
-	// 				Bridge: i.Source,
-	// 			},
-	// 		},
-	// 	})
-	// }
 
 	d.logger.Info("starting task", "driver_cfg", hclog.Fmt("%+v", driverConfig))
 	handle := drivers.NewTaskHandle(taskHandleVersion)
@@ -228,7 +210,7 @@ func (d *LibVirtDriverPlugin) StartTask(taskConfig *drivers.TaskConfig) (*driver
 	}
 
 	domainConfig := &libvirtxml.Domain{
-		Type: "qemu",
+		Type: driverConfig.Type,
 		Name: taskConfig.JobName,
 		UUID: uuid.New().String(),
 		Memory: &libvirtxml.DomainMemory{
@@ -240,13 +222,13 @@ func (d *LibVirtDriverPlugin) StartTask(taskConfig *drivers.TaskConfig) (*driver
 			Unit:  "MB",
 		},
 		VCPU: &libvirtxml.DomainVCPU{
-			Value: 2,
+			Value: 1,
 		},
 		OS: &libvirtxml.DomainOS{
 			Type: &libvirtxml.DomainOSType{
-				Arch:    "i686",
-				Machine: "pc-i440fx-6.2",
-				Type:    "hvm",
+				Arch:    driverConfig.OS.Arch,
+				Machine: driverConfig.OS.Machine,
+				Type:    driverConfig.OS.Type,
 			},
 			BootDevices: []libvirtxml.DomainBootDevice{
 				{
@@ -257,87 +239,115 @@ func (d *LibVirtDriverPlugin) StartTask(taskConfig *drivers.TaskConfig) (*driver
 		Devices: &libvirtxml.DomainDeviceList{
 			Emulator: d.config.Emulator,
 			Disks:    disks,
-			Graphics: []libvirtxml.DomainGraphic{
-				{
-					VNC: &libvirtxml.DomainGraphicVNC{
-						Port:      driverConfig.Vnc.Port,
-						WebSocket: driverConfig.Vnc.Websocket,
-					},
-				},
-			},
-			// Interfaces: interfaces,
 			Interfaces: []libvirtxml.DomainInterface{
-				// DOES NOT WORK:
-				// 	{
-				// 		Model: &libvirtxml.DomainInterfaceModel{
-				// 			Type: "virtio",
-				// 		},
-				// 		Source: &libvirtxml.DomainInterfaceSource{
-				// 			Direct: &libvirtxml.DomainInterfaceSourceDirect{
-				// 				Dev:  "eth0",
-				// 				Mode: "bridge",
-				// 			},
-				// 		},
-				// 	},
-				// WORKS:
-				// {
-				// 	Model: &libvirtxml.DomainInterfaceModel{
-				// 		Type: "virtio",
-				// 	},
-				// 	Source: &libvirtxml.DomainInterfaceSource{
-				// 		Network: &libvirtxml.DomainInterfaceSourceNetwork{
-				// 			Network: "default",
-				// 		},
-				// 	},
-				// },
-				// DOES NOT WORK:
-				// {
-				// 	Model: &libvirtxml.DomainInterfaceModel{
-				// 		Type: "virtio",
-				// 	},
-				// 	Source: &libvirtxml.DomainInterfaceSource{
-				// 		Network: &libvirtxml.DomainInterfaceSourceNetwork{
-				// 			Network: "nomad",
-				// 		},
-				// 	},
-				// },
-				// WORKS:
 				{
 					Model: &libvirtxml.DomainInterfaceModel{
 						Type: "virtio",
 					},
 					Source: &libvirtxml.DomainInterfaceSource{
-						Bridge: &libvirtxml.DomainInterfaceSourceBridge{
-							Bridge: "virbr0",
+						Network: &libvirtxml.DomainInterfaceSourceNetwork{
+							Network: "default",
 						},
 					},
 				},
-				// DOES NOT WORK:
-				// {
-				// 	Model: &libvirtxml.DomainInterfaceModel{
-				// 		Type: "virtio",
-				// 	},
-				// 	Source: &libvirtxml.DomainInterfaceSource{
-				// 		Bridge: &libvirtxml.DomainInterfaceSourceBridge{
-				// 			Bridge: "nomad",
-				// 		},
-				// 	},
-				// },
+			},
+			Serials: []libvirtxml.DomainSerial{
+				{
+					Protocol: &libvirtxml.DomainChardevProtocol{
+						Type: "serial",
+					},
+					Target: &libvirtxml.DomainSerialTarget{
+						Port: new(uint),
+					},
+				},
+			},
+			Consoles: []libvirtxml.DomainConsole{
+				{
+					Target: &libvirtxml.DomainConsoleTarget{
+						Type: "serial",
+						Port: new(uint),
+					},
+				},
+				{
+					Target: &libvirtxml.DomainConsoleTarget{
+						Type: "virtio",
+					},
+					Log: &libvirtxml.DomainChardevLog{
+						File: "/tmp/serial.log",
+					},
+				},
 			},
 		},
 	}
 
-	xml, err := domainConfig.Marshal()
+	if driverConfig.VNC != nil {
+		if driverConfig.VNC.Port != 0 || driverConfig.VNC.Websocket != 0 {
+			domainConfig.Devices.Graphics = []libvirtxml.DomainGraphic{
+				{
+					VNC: &libvirtxml.DomainGraphicVNC{
+						Port:      driverConfig.VNC.Port,
+						WebSocket: driverConfig.VNC.Websocket,
+					},
+				},
+			}
+		}
+	}
+
+	if err := d.setNetworkInterfaces(client, &driverConfig, domainConfig); err != nil {
+		return nil, nil, fmt.Errorf("failed to generate network interfaces: %v", err)
+	}
+
+	if err := d.generateISO9660(taskConfig.AllocDir); err != nil {
+		return nil, nil, fmt.Errorf("failed to generate cloud-init ISO: %v", err)
+	}
+
+	domainConfig.Devices.Disks = append(domainConfig.Devices.Disks, libvirtxml.DomainDisk{
+		Device: "cdrom",
+		Target: &libvirtxml.DomainDiskTarget{
+			Dev: "hdd",
+			Bus: "sata",
+		},
+		Driver: &libvirtxml.DomainDiskDriver{
+			Type: "raw",
+		},
+		Source: &libvirtxml.DomainDiskSource{
+			File: &libvirtxml.DomainDiskSourceFile{
+				File: filepath.Join(taskConfig.AllocDir, cloudInitISOName),
+			},
+		},
+	})
+
+	domainXML, err := domainConfig.Marshal()
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not marshall vm config: %v", err)
 	}
 
-	domain, err := client.DomainCreateXML(xml, libvirt.DomainNone)
+	domain, err := client.DomainCreateXML(domainXML, libvirt.DomainNone)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create domains: %v", err)
 	}
 
 	// LibVirt logic end
+
+	rawXML, err := client.DomainGetXMLDesc(domain, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	domainResp := libvirtxml.Domain{}
+
+	if err := domainResp.Unmarshal(rawXML); err != nil {
+		return nil, nil, err
+	}
+
+	d.logger.Error("unmarshal response", "resp", domainResp)
+
+	interfaces, err := client.DomainInterfaceAddresses(domain, 0, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	d.logger.Error("domain interface address", "interfaces", interfaces)
 
 	h := &taskHandle{
 		ctx:        d.ctx,
@@ -555,6 +565,6 @@ func (d *LibVirtDriverPlugin) CalculateVcpuCount(shares int64) int64 {
 
 // ExecTask returns the result of executing the given command inside a task.
 // This is an optional capability.
-func (d *LibVirtDriverPlugin) ExecTask(taskID string, cmd []string, timeout time.Duration) (*drivers.ExecTaskResult, error) {
+func (d *LibVirtDriverPlugin) ExecTask(_ string, _ []string, _ time.Duration) (*drivers.ExecTaskResult, error) {
 	return nil, errors.New("this driver does not support exec")
 }

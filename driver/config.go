@@ -1,27 +1,33 @@
 package driver
 
-import (
-	"github.com/hashicorp/nomad/plugins/shared/hclspec"
-)
+import "github.com/hashicorp/nomad/plugins/shared/hclspec"
 
 // Config contains configuration information for the plugin
 type Config struct {
 	Emulator string `codec:"emulator"`
 }
 
-// TaskConfig contains configuration information for a task that runs with
-// this plugin
+// TaskConfig contains configuration information for a task that runs within
+// this plugin.
 type TaskConfig struct {
-	Disk      []Disk      `codec:"disk"`
-	Interface []Interface `codec:"interface"`
-	Vnc       Vnc         `codec:"vnc"`
+	Type             string             `codec:"type"`
+	OS               OS                 `codec:"os"`
+	Disk             []Disk             `codec:"disk"`
+	NetworkInterface []NetworkInterface `codec:"network_interface"`
+	VNC              *VNC               `codec:"vnc"`
+}
+
+type OS struct {
+	Arch    string `codec:"arch"`
+	Machine string `codec:"machine"`
+	Type    string `codec:"type"`
 }
 
 type Disk struct {
 	Source string `codec:"source"`
-	Driver Driver `codec:"driver"`
 	Target string `codec:"target"`
 	Device string `codec:"device"`
+	Driver Driver `codec:"driver"`
 }
 
 type Driver struct {
@@ -29,18 +35,12 @@ type Driver struct {
 	Type string `codec:"type"`
 }
 
-// <interface type='bridge'>
-// 	<model type='virtio'/>
-// 	<source bridge='virbr0'/>
-// 	<address type='pci' domain='0x0000' bus='0x00' slot='0x03' function='0x0'/>
-// </interface>
-
-type Interface struct {
-	Type   string `codec:"type"`
-	Source string `codec:"source"`
+type NetworkInterface struct {
+	NetworkName string `codec:"network_name"`
+	Address     string `codec:"address"`
 }
 
-type Vnc struct {
+type VNC struct {
 	Port      int `codec:"port"`
 	Websocket int `codec:"websocket"`
 }
@@ -53,6 +53,14 @@ var configSpec = hclspec.NewObject(map[string]*hclspec.Spec{
 })
 
 var taskConfigSpec = hclspec.NewObject(map[string]*hclspec.Spec{
+	"type": hclspec.NewAttr("type", "string", true),
+
+	"os": hclspec.NewBlock("os", true, hclspec.NewObject(map[string]*hclspec.Spec{
+		"arch":    hclspec.NewAttr("arch", "string", true),
+		"machine": hclspec.NewAttr("machine", "string", true),
+		"type":    hclspec.NewAttr("type", "string", true),
+	})),
+
 	"disk": hclspec.NewBlockList("disk", hclspec.NewObject(map[string]*hclspec.Spec{
 		"source": hclspec.NewAttr("source", "string", true),
 		"driver": hclspec.NewBlock("driver", true, hclspec.NewObject(map[string]*hclspec.Spec{
@@ -62,12 +70,14 @@ var taskConfigSpec = hclspec.NewObject(map[string]*hclspec.Spec{
 		"target": hclspec.NewAttr("target", "string", true),
 		"device": hclspec.NewAttr("device", "string", true),
 	})),
-	"interface": hclspec.NewBlockList("interface", hclspec.NewObject(map[string]*hclspec.Spec{
-		"type":   hclspec.NewAttr("type", "string", true),
-		"source": hclspec.NewAttr("source", "string", true),
+
+	"network_interface": hclspec.NewBlockList("network_interface", hclspec.NewObject(map[string]*hclspec.Spec{
+		"network_name": hclspec.NewAttr("network_name", "string", true),
+		"address":      hclspec.NewAttr("address", "string", false),
 	})),
-	"vnc": hclspec.NewBlock("vnc", true, hclspec.NewObject(map[string]*hclspec.Spec{
-		"port":      hclspec.NewAttr("port", "number", true),
-		"websocket": hclspec.NewAttr("websocket", "number", true),
+
+	"vnc": hclspec.NewBlock("vnc", false, hclspec.NewObject(map[string]*hclspec.Spec{
+		"port":      hclspec.NewAttr("port", "number", false),
+		"websocket": hclspec.NewAttr("websocket", "number", false),
 	})),
 })
